@@ -1,0 +1,19 @@
+# Abhängigkeiten und Build-Artefakte
+node_modules/
+dist/
+.vite/
+
+# Lokaler Cache (heruntergeladene Natural-Earth-Rohdaten, Test-Bundles)
+.cache/
+
+# Betriebssystem und Editor
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+.idea/
+
+# Hinweis: .vscode/ wird bewusst nicht versioniert. Wenn gemeinsame
+# Einstellungen gewünscht sind, hier eine Ausnahme ergänzen, z. B.
+#   !.vscode/extensions.json
+.vscode/

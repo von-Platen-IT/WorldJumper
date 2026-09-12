@@ -1,0 +1,19 @@
+ich möchte eine 3d Website bauen. sie soll einen stilisierten Globus im Weltall zeigen. er dreht sich langsam. ich habe die Möglichkeit in einem textfeld ein land einzugeben und das textfeld verschwindet. es gibt eine Sekunde Pause ehe die Action beginnt. Die Kamera zoomt auf die Welt. dort wird auf das jeweilige Land gezoomt, das eingegeben wurde. der globus dreht sich dabei entsprechend, so das man das land großflächig im Fenster sieht. wenn der User etwas eingibt erscheint zunächst das Textfeld für die Auswahl des Landes. nach drücken der return taste verschwindet das Textfeld. Dann eine Sekunde Pause ehe die Action losgeht. Die Kamera zoomt etwas heraus sodas man den Globus wieder erkennt, die Texture des Landes verblasst dabei und der globus dreht sich zu dem ausgewählten land und zoomt dorthin.
+
+Die Grenzen des Landes sollen immer erkennbar sein.
+
+Damit man die Länder gut erkennt hat nur das ausgewählte land seine dazugehörige flagge und den namen des Landes als Textur.
+Die Geografik sollte stimmen aber es sollen keine Details sichtbar sein. Performance ist wichtiger als geographische Exaktheit.
+Die Software dient für die erstellung eines filmeffektes. ich will in videos globale zusammenhänge darstellen und mit dem tool szenen erzeugen die den geographischen zusammenhang aufzeigen sollen.
+
+Das tool soll sich sowohl für hochformatige als querformatige videos eignen. full-hd in portrait oder landscape format. es soll ausserdem möglich sein eine liste von Ländern auszuwählen. Diese werden dann nacheinander dargestellt mit jeweils einer sekunde pause dazwischen. den rest mache ich mit meinem schnittprogramm.
+
+
+bitte erstelle eine umfassende planung für die umsetzung einer website mit einem ai coding agenten. also keinen code erzeugen sonder anweisungen für die erstellung in meiner entwicklungsungebung. -- wähle die technologien
+-- woher die Ausgangsdaten für das Tools stammen
+-- es soll eine performante anwendung werden, wahrscheinlich mit threejs.
+-- bemühe dich um KISS beim programmieren aber sorge bitte trozdem dafür das die seite effektvolle darstellungen liefert
+-- es wird kein sound oder musik gewünscht
+-- erstelle eine readme mit der projektbeschreibung und weiter anweisunGEN ALS MD-DATEIEN
+
+vielen dank für deine hilfe und gutes gelingen.

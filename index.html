@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#04060f" />
+    <title>Globe Film Tool</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="stage" class="stage">
+        <canvas id="scene"></canvas>
+        <div id="vignette" class="vignette" aria-hidden="true"></div>
+        <div id="safe-area" class="safe-area" aria-hidden="true"></div>
+        <div id="ui" class="ui"></div>
+      </div>
+      <div id="hud" class="hud"></div>
+    </div>
+
+    <div id="boot" class="boot">
+      <div class="boot__inner">
+        <div class="boot__globe" aria-hidden="true"></div>
+        <p class="boot__title">Globe Film Tool</p>
+        <p class="boot__status" id="boot-status">Länderdaten werden geladen …</p>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

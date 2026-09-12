@@ -1,0 +1,29 @@
+{
+  "name": "globe-film-tool",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "3D web tool for generating cinematic globe sequences for video production.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit",
+    "data": "node scripts/prepare-data.mjs",
+    "smoke": "esbuild scripts/smoke.ts --bundle --platform=node --format=esm --outfile=.cache/smoke.mjs && node .cache/smoke.mjs",
+    "lan": "bash scripts/open-dev-port.sh",
+    "lan:close": "bash scripts/open-dev-port.sh --close",
+    "lan:status": "bash scripts/open-dev-port.sh --status"
+  },
+  "dependencies": {
+    "flag-icons": "^7.5.0",
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "@types/three": "^0.186.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}
