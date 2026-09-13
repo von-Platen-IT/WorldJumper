@@ -36,9 +36,18 @@ interface Transition {
   pullDistance: number;
   endDistance: number;
   startIntensity: number;
+  /** Label opacity at the moment the transition began, so the fade is absolute. */
+  startLabelOpacity: number;
 }
 
 const AXIS_Y = new Vector3(0, 1, 0);
+
+/**
+ * Scratch objects and constants for the per-frame path. The render loop runs
+ * 60 times a second, so allocating a Quaternion per frame is pure GC pressure.
+ */
+const SPIN_SCRATCH = new Quaternion();
+const IDENTITY_QUATERNION = new Quaternion();
 
 /**
  * The single source of truth for every camera and globe movement.
@@ -98,7 +107,15 @@ export class AnimationDirector {
     }
   }
 
-  /** Starts a film sequence for one or more countries, in the given order. */
+  /**
+   * Starts a film sequence for one or more countries, in the given order.
+   *
+   * Deliberately does NOT clear the current accent or label. `beginNextCountry`
+   * records the running intensity and label opacity as the start of the
+   * transition, so `PREPARE_GLOBE` fades the previous country out while the
+   * camera pulls back. A hard reset here would cut it away instead and make a
+   * new selection look like a jump back to the wide shot.
+   */
   start(countries: CountryIndexEntry[]): void {
     if (!countries.length) return;
     this.queue = [...countries];
@@ -107,10 +124,6 @@ export class AnimationDirector {
     this.current = null;
     this.resetTween = null;
     this.transition = null;
-    this.labelOpacity = 0;
-    this.scene.land.setActive(null);
-    this.scene.land.setIntensity(0);
-    this.scene.label.hide();
     // Freeze the idle spin for a calm frame before anything moves.
     this.setPhase('PAUSE_BEFORE_ACTION', TIMING.pauseBeforeAction);
   }
@@ -146,15 +159,15 @@ export class AnimationDirector {
       const t = clamp01(tween.elapsed / tween.duration);
       const eased = cameraEase(t);
       this.scene.rig.distance = lerp(tween.fromDistance, this.scene.rig.getProfile().idleDistance, eased);
-      this.scene.globe.quaternion.slerpQuaternions(tween.fromQuaternion, new Quaternion(), eased);
+      this.scene.globe.quaternion.slerpQuaternions(tween.fromQuaternion, IDENTITY_QUATERNION, eased);
       if (t >= 1) this.resetTween = null;
       return;
     }
 
     if (this.phase === 'IDLE' || this.phase === 'INPUT') {
       // Slow, continuous spin around the globe's vertical axis.
-      const spin = new Quaternion().setFromAxisAngle(AXIS_Y, IDLE_SPIN_SPEED * dt);
-      this.scene.globe.quaternion.premultiply(spin);
+      SPIN_SCRATCH.setFromAxisAngle(AXIS_Y, IDLE_SPIN_SPEED * dt);
+      this.scene.globe.quaternion.premultiply(SPIN_SCRATCH);
       return;
     }
 
@@ -215,6 +228,7 @@ export class AnimationDirector {
       pullDistance: Math.min(profile.idleDistance * 1.06, profile.maxDistance),
       endDistance: this.scene.computeZoomDistance(country),
       startIntensity: this.scene.land.getIntensity(),
+      startLabelOpacity: this.labelOpacity,
     };
 
     // Warm the flag so the card is ready the moment zooming starts.
@@ -228,8 +242,10 @@ export class AnimationDirector {
     const eased = fadeEase(t);
     this.scene.rig.distance = lerp(trans.startDistance, trans.pullDistance, cameraEase(t));
     // Fade out any previous accent and label while the camera pulls back.
+    // Interpolate from the recorded start value: feeding the running value back
+    // in would make the fade depend on the frame rate.
     this.scene.land.setIntensity(lerp(trans.startIntensity, 0, eased));
-    this.labelOpacity = lerp(this.labelOpacity, 0, eased);
+    this.labelOpacity = lerp(trans.startLabelOpacity, 0, eased);
     this.scene.label.setOpacity(this.labelOpacity);
     if (t >= 1) {
       this.scene.land.setActive(null);

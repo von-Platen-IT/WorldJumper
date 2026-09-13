@@ -1,7 +1,7 @@
 import { AnimationDirector, type AnimationPhase, type DirectorStatus } from '../animation/AnimationDirector';
 
 const isInteractive = (phase: AnimationPhase): boolean => phase === 'IDLE' || phase === 'INPUT';
-import { FORMATS, type FormatKey } from '../config';
+import { FORMATS, PANEL_FADE_MS, TIMING, type FormatKey } from '../config';
 import { CountryRegistry } from '../data/CountryRegistry';
 import type { CountryFeatureCollection, CountryIndexEntry, CountryIndexFile } from '../data/types';
 import { buildWorld } from '../geography/GeographyEngine';
@@ -45,6 +45,10 @@ export class AppController {
 
   private readonly elements: Elements;
   private lastPhase: AnimationPhase | null = null;
+  /** Set when the mask was hidden by hand, e.g. to keep a recording clean. */
+  private panelHidden = false;
+  /** Pending "show the mask again" timer after a finished shot. */
+  private maskTimer = 0;
   private frameHandle = 0;
   private lastFrameTime = 0;
   private fps = 0;
@@ -68,6 +72,8 @@ export class AppController {
   }
 
   async init(): Promise<void> {
+    // Keep the CSS transition and the code that waits for it in sync.
+    document.documentElement.style.setProperty('--panel-fade', `${PANEL_FADE_MS}ms`);
     this.setBootStatus('Länderdaten werden geladen …');
     const [features, index] = await Promise.all([
       fetch(assetUrl('data/countries.geojson')).then((r) => {
@@ -113,9 +119,14 @@ export class AppController {
     this.loop(this.lastFrameTime);
   }
 
-  private startSequence(countries: CountryIndexEntry[]): void {
-    this.ui.setBusy(true);
+  /**
+   * Hides the mask first and only then starts the sequence, so nothing moves
+   * while the mask is still fading. The calm second that follows is the pause
+   * required by the flow.
+   */
+  private async startSequence(countries: CountryIndexEntry[]): Promise<void> {
     this.hud.setBusy(true);
+    await this.ui.hideForSequence();
     this.director.start(countries);
   }
 
@@ -146,24 +157,55 @@ export class AppController {
     const progress = status.total > 1 ? ` · ${Math.min(status.index + 1, status.total)}/${status.total}` : '';
     this.hud.setPhase(`${label}${country}${progress}`);
 
-    const interactive = status.phase === 'IDLE' || status.phase === 'INPUT';
-    if (this.lastPhase !== status.phase) {
-      const wasBusy = this.lastPhase !== null && !isInteractive(this.lastPhase);
-      if (interactive) {
-        this.ui.setBusy(false);
-        this.hud.setBusy(false);
-        // Only clear and refocus when coming back from a film sequence, so a
-        // simple focus/blur cycle never wipes what the user typed.
-        if (wasBusy) {
-          this.ui.resetInputs();
-          this.ui.focus();
-        }
-      } else {
-        this.ui.setBusy(true);
-        this.hud.setBusy(true);
-      }
-      this.lastPhase = status.phase;
+    if (this.lastPhase === status.phase) return;
+
+    const wasBusy = this.lastPhase !== null && !isInteractive(this.lastPhase);
+    const available = this.isPanelAvailable(status.phase);
+    // Every phase change clears a manual hide, so the next country brings the
+    // mask back even if it was hidden for a recording.
+    this.panelHidden = false;
+    window.clearTimeout(this.maskTimer);
+
+    // The reset affordance stays visible while a country is held.
+    this.hud.setBusy(!isInteractive(status.phase));
+
+    if (!available) {
+      this.ui.setBusy(true);
+    } else if (status.phase === 'HOLD' && wasBusy) {
+      // Let the finished shot stand for a moment so the label can be read
+      // before the mask covers the frame again.
+      this.maskTimer = window.setTimeout(() => {
+        if (this.lastPhase === 'HOLD' && !this.panelHidden) this.ui.setBusy(false);
+      }, TIMING.maskAfterHold);
+    } else {
+      this.ui.setBusy(this.panelHidden);
     }
+
+    if (wasBusy && available) {
+      // Clear and refocus only when coming back from a film sequence, so a
+      // simple focus/blur cycle never wipes what the user typed.
+      this.ui.resetInputs();
+      // Not focused while a country is held: leaving focus off the field keeps
+      // the shortcuts (E hides the mask) working straight away.
+      if (status.phase !== 'HOLD') this.ui.focus();
+    }
+    this.lastPhase = status.phase;
+  }
+
+  /** Phases in which the search panel is usable. */
+  private isPanelAvailable(phase: AnimationPhase): boolean {
+    return phase === 'IDLE' || phase === 'INPUT' || phase === 'HOLD';
+  }
+
+  /**
+   * Shows or hides the input mask without touching the scene. While a country
+   * is held this lets a recording stay free of the mask; the next country can
+   * still be typed as soon as the mask is back.
+   */
+  private togglePanel(): void {
+    if (!this.lastPhase || !this.isPanelAvailable(this.lastPhase)) return;
+    this.panelHidden = !this.panelHidden;
+    this.ui.setBusy(this.panelHidden);
   }
 
   private bindGlobalKeys(): void {
@@ -182,6 +224,14 @@ export class AppController {
       }
       if (key === 'h' && !typing) {
         this.hud.setVisible(!this.hud.isVisible());
+        return;
+      }
+      if (key === 'l' && !typing) {
+        this.hud.setLogoVisible(!this.hud.isLogoVisible());
+        return;
+      }
+      if (key === 'e' && !typing) {
+        this.togglePanel();
         return;
       }
       if (key === 's' && !typing) {
@@ -219,6 +269,7 @@ export class AppController {
   }
 
   dispose(): void {
+    window.clearTimeout(this.maskTimer);
     cancelAnimationFrame(this.frameHandle);
     this.scene?.dispose();
   }

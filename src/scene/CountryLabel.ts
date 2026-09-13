@@ -3,21 +3,29 @@ import {
   LinearFilter,
   Mesh,
   MeshBasicMaterial,
+  PerspectiveCamera,
   PlaneGeometry,
   Quaternion,
   SRGBColorSpace,
   Vector3,
 } from 'three';
-import { COLORS, LABEL_RADIUS } from '../config';
+import { COLORS, GLOBE_RADIUS, LABEL, type FormatKey } from '../config';
 import type { CountryIndexEntry } from '../data/types';
 import { latLonToDirection } from '../geography/geoProjection';
-import { labelAnchor } from '../geography/orientation';
+import { computeLabelLayout } from './labelLayout';
 
-const CANVAS_W = 1024;
-const CANVAS_H = 416;
-const CARD_ASPECT = CANVAS_W / CANVAS_H;
+const CANVAS_W = LABEL.canvasWidth;
+const CANVAS_H = LABEL.canvasHeight;
 
-const PLANE_FACING = new Vector3(0, 0, 1);
+// Scratch objects: placement runs every frame while the card is visible.
+const SCRATCH_DIRECTION = new Vector3();
+const SCRATCH_SURFACE = new Vector3();
+const SCRATCH_TO_POINT = new Vector3();
+const SCRATCH_RIGHT = new Vector3();
+const SCRATCH_UP = new Vector3();
+const SCRATCH_BACK = new Vector3();
+const SCRATCH_FORWARD = new Vector3();
+const SCRATCH_PROJECTED = new Vector3();
 
 /** Small, bounded cache so repeated sequences do not re-fetch flag SVGs. */
 class FlagCache {
@@ -61,9 +69,19 @@ class FlagCache {
 }
 
 /**
- * A single card that carries the flag and the country name. It is positioned on
- * the globe surface at the country's centre (nudged north) and keeps the globe's
- * rotation, so it never behaves like a flat HUD overlay.
+ * A single card that carries the flag and the country name.
+ *
+ * It stays anchored to the country's position on the globe, but is drawn
+ * parallel to the image plane instead of tangent to the surface. That keeps the
+ * text horizontal and lets the size be measured in fractions of the frame, so
+ * small and large countries are equally readable and the card never leaves the
+ * frame. Placement happens in `update()`, which runs every frame while the card
+ * is visible because the camera distance and the clamped position both change
+ * during a camera move.
+ *
+ * The mesh therefore belongs to the scene, not to the rotating globe group: as
+ * a child of the globe it would inherit the globe's rotation and stand at an
+ * angle.
  */
 export class CountryLabel {
   readonly mesh: Mesh;
@@ -72,6 +90,8 @@ export class CountryLabel {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly flags = new FlagCache();
+  /** Country direction in the globe's own frame, set by `show()`. */
+  private readonly direction = new Vector3();
   private requestId = 0;
   private entry: CountryIndexEntry | null = null;
 
@@ -98,10 +118,6 @@ export class CountryLabel {
     this.mesh.renderOrder = 8;
   }
 
-  get visibleEntry(): CountryIndexEntry | null {
-    return this.entry;
-  }
-
   hide(): void {
     this.entry = null;
     this.material.opacity = 0;
@@ -119,24 +135,79 @@ export class CountryLabel {
     if (entry.flag) await this.flags.get(this.resolveAsset(entry.flag));
   }
 
-  /** Places and renders the card for a country. Safe against rapid switching. */
+  /** Loads the card content for a country. Safe against rapid switching. */
   async show(entry: CountryIndexEntry): Promise<void> {
     this.entry = entry;
     const token = ++this.requestId;
-
-    const direction = latLonToDirection(entry.lat, entry.lon);
-    const anchor = labelAnchor(direction, entry.angularRadius);
-    const lift = Math.max(0.02, Math.min(0.5, entry.angularRadius * 0.5));
-    this.mesh.position.copy(anchor).multiplyScalar(LABEL_RADIUS + lift);
-    this.mesh.quaternion.copy(new Quaternion().setFromUnitVectors(PLANE_FACING, anchor));
-
-    const width = Math.max(0.78, Math.min(1.9, 0.62 + entry.angularRadius * 1.9));
-    this.mesh.scale.set(width, width / CARD_ASPECT, 1);
+    latLonToDirection(entry.lat, entry.lon, this.direction);
 
     const flag = entry.flag ? await this.flags.get(this.resolveAsset(entry.flag)) : null;
     if (token !== this.requestId) return;
     this.draw(entry, flag);
     this.mesh.visible = this.material.opacity > 0.002;
+  }
+
+  /**
+   * Places and sizes the card for the current frame. Cheap enough to call every
+   * frame; returns immediately while the card is hidden.
+   *
+   * The caller must ensure the camera's world matrix is up to date, because the
+   * country centre is projected through it.
+   */
+  update(
+    camera: PerspectiveCamera,
+    globeQuaternion: Quaternion,
+    aspect: number,
+    format: FormatKey,
+  ): void {
+    if (!this.entry || !this.mesh.visible) return;
+
+    // Country position on the globe surface, in world space.
+    SCRATCH_DIRECTION.copy(this.direction).applyQuaternion(globeQuaternion);
+    SCRATCH_SURFACE.copy(SCRATCH_DIRECTION).multiplyScalar(GLOBE_RADIUS * LABEL.radiusFactor);
+
+    // Camera basis. Offsets are expressed in these axes, because the card lies
+    // in the image plane.
+    SCRATCH_RIGHT.setFromMatrixColumn(camera.matrixWorld, 0);
+    SCRATCH_UP.setFromMatrixColumn(camera.matrixWorld, 1);
+    SCRATCH_BACK.setFromMatrixColumn(camera.matrixWorld, 2);
+    SCRATCH_FORWARD.copy(SCRATCH_BACK).negate();
+
+    const depth = Math.max(
+      1e-3,
+      SCRATCH_TO_POINT.copy(SCRATCH_SURFACE).sub(camera.position).dot(SCRATCH_FORWARD),
+    );
+    const tanHalfFov = Math.tan((camera.fov * Math.PI) / 360);
+    const visibleHeight = 2 * depth * tanHalfFov;
+
+    SCRATCH_PROJECTED.copy(SCRATCH_SURFACE).project(camera);
+    const layout = computeLabelLayout(
+      visibleHeight,
+      aspect,
+      format,
+      SCRATCH_PROJECTED.x,
+      SCRATCH_PROJECTED.y,
+    );
+
+    // Normalised device coordinates -> world offset within the image plane.
+    const halfHeight = depth * tanHalfFov;
+    const halfWidth = halfHeight * aspect;
+
+    this.mesh.position
+      .copy(camera.position)
+      .addScaledVector(SCRATCH_FORWARD, depth)
+      .addScaledVector(SCRATCH_RIGHT, layout.ndcX * halfWidth)
+      .addScaledVector(SCRATCH_UP, layout.ndcY * halfHeight);
+    // Image-parallel. The camera never rolls, so copying its rotation is what
+    // keeps the text horizontal.
+    this.mesh.quaternion.copy(camera.quaternion);
+    this.mesh.scale.set(layout.width, layout.height, 1);
+  }
+
+  dispose(): void {
+    this.texture.dispose();
+    this.material.dispose();
+    this.mesh.geometry.dispose();
   }
 
   private resolveAsset(path: string): string {

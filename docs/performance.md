@@ -18,6 +18,7 @@ Vor dem Erzeugen der Three.js-Geometrie:
 - möglichst wenige Vertex-Dopplungen
 - kleine Inseln bzw. extrem kleine Polygone nach einem nachvollziehbaren Schwellwert entfernen, falls sie visuell nichts beitragen
 - Geometrien wiederverwenden
+- dünne Dreiecke ("Splitter") nicht nach ihrem Seitenverhältnis verwerfen. Sie decken echte Fläche ab; ihr Wegfall reißt keilförmige Löcher, durch die die dunkle Ozeankugel sichtbar wird. Ursache und Messwerte: [Verifikation](verifikation.md#dunkle-keile-in-großen-ländern-kanada-usa)
 
 ## Draw Calls
 

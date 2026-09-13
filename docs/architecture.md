@@ -114,6 +114,8 @@ Empfohlene Ebenen:
 
 Die Flaggen-/Namensdarstellung wird nur für das aktuelle Land aufgebaut bzw. aktiviert.
 
+Die Karte bleibt am Land verankert, wird aber **parallel zur Bildebene** gezeichnet statt tangential zur Kugel. Der Text steht dadurch immer horizontal, und die Größe wird in Bruchteilen des Bildes gemessen, nicht aus dem Winkelradius des Landes. Eine tangentiale, mit dem Winkelradius skalierte Karte stand schief und lief bei großen Ländern über den Rahmen.
+
 ### 8. UI Layer
 
 Normales HTML/CSS:
@@ -193,7 +195,8 @@ Die Umsetzung folgt der obigen Gliederung, fasst sie aber in kleinere Dateien mi
 | [`src/scene/CameraRig.ts`](../src/scene/CameraRig.ts:1) | gekapselte Kamera (Abstand, Ziel, Profil) |
 | [`src/scene/Starfield.ts`](../src/scene/Starfield.ts:1) | zwei Sternenebenen und Nebel-Backdrop |
 | [`src/scene/Atmosphere.ts`](../src/scene/Atmosphere.ts:1) | einziger Custom-Shader (Randglow) |
-| [`src/scene/CountryLabel.ts`](../src/scene/CountryLabel.ts:1) | Flaggen-/Namenskarte als Canvas-Textur mit begrenztem Flaggen-Cache |
+| [`src/scene/CountryLabel.ts`](../src/scene/CountryLabel.ts:1) | Flaggen-/Namenskarte als Canvas-Textur mit begrenztem Flaggen-Cache, bildparallele Platzierung pro Frame |
+| [`src/scene/labelLayout.ts`](../src/scene/labelLayout.ts:1) | reine Layout-Rechnung der Karte (Größe im Bildfeld, Klemmung in die Safe Area) |
 | [`src/geography/GeographyEngine.ts`](../src/geography/GeographyEngine.ts:1) | GeoJSON → 3D, Triangulierung, zusammengefasste Land- und Grenzgeometrie |
 | [`src/geography/LandLayer.ts`](../src/geography/LandLayer.ts:1) | Landmesh, Grenzlinien und der jeweils aktive Zielstaat |
 | [`src/geography/geoProjection.ts`](../src/geography/geoProjection.ts:1) | lat/lon → Kugelkoordinate, Antimeridian-Behandlung |
@@ -202,15 +205,17 @@ Die Umsetzung folgt der obigen Gliederung, fasst sie aber in kleinere Dateien mi
 | [`src/animation/easing.ts`](../src/animation/easing.ts:1) | alle Easing-Kurven |
 | [`src/data/CountryRegistry.ts`](../src/data/CountryRegistry.ts:1) | tolerante Suche und Auflösung von Namen und ISO-Codes |
 | [`src/ui/SearchUI.ts`](../src/ui/SearchUI.ts:1) | Suchfeld, Autocomplete, Listenmodus, Formatwahl |
-| [`src/ui/Hud.ts`](../src/ui/Hud.ts:1) | Renderstatistiken und Reset-Zugang |
+| [`src/ui/Hud.ts`](../src/ui/Hud.ts:1) | Logo, Renderstatistiken und Reset-Zugang |
 
 ### Abweichungen zur ursprünglichen Planung
 
-- **Ein Draw Call für das gesamte Land.** Statt eines Meshes pro Land wird eine gemeinsame Geometrie mit fortlaufenden Vertex-Bereichen je Land gebaut. Die Hervorhebung erfolgt über Vertex-Farben innerhalb dieses Bereichs. Das reduziert Draw Calls drastisch und hält die Highlight-Kosten konstant klein.
+- **Ein Draw Call für das gesamte Land.** Statt eines Meshes pro Land wird eine gemeinsame Geometrie mit fortlaufenden Vertex-Bereichen je Land gebaut. Die Basisfarbe steckt in den Vertex-Farben; der Akzent kommt über ein `aHighlight`-Vertex-Attribut und das Uniform `uHighlightAmount` hinzu. Das reduziert Draw Calls drastisch und hält die Highlight-Kosten konstant klein.
 - **Dominante Landmasse statt Gesamtschwerpunkt.** Für Ausrichtung und Zoom wird bewusst nur die größte zusammenhängende Landfläche herangezogen. Andernfalls würden Überseegebiete die Ausrichtung von Frankreich, den USA oder Neuseeland verfälschen.
-- **Unterteilung im Parameterraum, nicht auf der Kugel.** Landdreiecke werden in Längen-/Breitengradkoordinaten bis auf 2° Kantenlänge verfeinert und erst dann projiziert. Eine Unterteilung über 3D-Mittelpunkte würde Großkreise approximieren und die Fläche großer Länder um bis zu 28% aufblähen. Details unter [Behobene Fehler](verifikation.md#behobene-fehler).
-- **Teilweise Farbpuffer-Aktualisierung.** Da das Land zu einem einzigen Mesh mit rund 796.000 Vertices verschmilzt, würde ein vollständiges `needsUpdate` pro Frame knapp 10 MB übertragen. Stattdessen wird über `addUpdateRange` nur der Vertex-Bereich des aktiven Landes hochgeladen, und die Basisfarbe wird pro Land berechnet statt pro Vertex gespeichert.
-- **Skalarer heißer Pfad.** Der Aufbau der Weltgeometrie verzichtet bewusst auf `Vector3`-Objekte und rechnet direkt mit Zahlen. Mit Objekt-Allokation brauchte der Aufbau rund 3,0 s, jetzt rund 1,5 s.
+- **Unterteilung im Parameterraum, nicht auf der Kugel.** Landdreiecke werden in Längen-/Breitengradkoordinaten bis auf 2,5° Kantenlänge verfeinert und erst dann projiziert. Unterteilt wird durch **Halbierung der längsten Kante**, nicht durch Vierteilung über alle Mittelpunkte: Letztere erzeugt ähnliche Kinder und bläht dünne Regionen auf. Eine Unterteilung über 3D-Mittelpunkte würde Großkreise approximieren und die Fläche großer Länder um bis zu 28% aufblähen. Details unter [Behobene Fehler](verifikation.md#behobene-fehler).
+- **Triangulierung auf den unverdichteten Ringen.** Die Kantenverdichtung dient nur den Grenzlinien; für die Triangulierung werden die rohen Ringe verwendet. Verdichtete Punkte liegen exakt auf geraden Kanten und werden von Earcut zu Splittern, die früher verworfen wurden – dadurch fehlten ganze Keile der Landesfläche.
+- **Highlight über Uniform statt Puffer-Upload.** Das Land verschmilzt zu einem einzigen Mesh; ein vollständiges `needsUpdate` pro Frame würde mehrere MB übertragen. Stattdessen markiert ein Byte pro Vertex (`aHighlight`) das aktive Land, und pro Frame wird nur ein Uniform gesetzt.
+- **Skalarer heißer Pfad.** Der Aufbau der Weltgeometrie verzichtet bewusst auf `Vector3`-Objekte und rechnet direkt mit Zahlen. Mit Objekt-Allokation brauchte der Aufbau rund 3,0 s; nach der Geometrie-Korrektur liegt er bei rund 0,1 s.
+- **Label bildparallel statt tangential.** Die Karte hing früher als Kind der Globus-Gruppe und wurde mit `setFromUnitVectors` ausgerichtet – das ergibt eine beliebige Rollung, und die Skalierung mit dem Winkelradius ließ große Länder über den Rahmen laufen. Sie hängt jetzt an der Szene, steht parallel zur Bildebene und wird pro Frame in Bildbruchteilen bemessen und in die Safe Area geklemmt. Die Rechnung liegt als reine Funktion in [`labelLayout.ts`](../src/scene/labelLayout.ts:1) und ist damit headless prüfbar.
 - **`RESET` als eigener Übergang.** Der im Dokument genannte Reset ist als kurzer, weicher Übergang (750 ms) implementiert, statt die Kamera hart zurückzusetzen. Ein harter Sprung wäre im fertigen Film unbrauchbar.
 - **Ein zusätzlicher Zustand `RESET` in der Zustandsmaschine** ist der einzige Zusatz gegenüber der empfohlenen Liste.
 

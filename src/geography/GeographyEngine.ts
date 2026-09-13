@@ -24,7 +24,24 @@ import { latLonToVector3, openRing, unwrapRing, type LngLat } from './geoProject
  *    Dreieck dagegen exakt, die Projektion erhält die Region also unverändert.
  */
 const STEP_DEG = 2.5;
-const MAX_REFINE_DEPTH = 8;
+
+/**
+ * Reichweite der Unterteilung als Sicherheitsnetz; die eigentliche Abbruch-
+ * bedingung ist die Kantenlänge. Die Halbierung der längsten Kante ist eine
+ * Bisektion, ein Pfad kann daher mehr Ebenen brauchen als log2(Kante/STEP).
+ */
+const MAX_REFINE_DEPTH = 20;
+
+/**
+ * Nur echt entartete Dreiecke (ohne Fläche) werden verworfen. Ein früherer
+ * Filter verwarf zusätzlich alle Dreiecke mit schlechtem Seitenverhältnis
+ * ("Splitter"). Da die Unterteilung ein Dreieck in ähnliche Kinder zerlegt,
+ * blieben Splitter Splitter und wurden ausnahmslos verworfen – ganze
+ * dünne Keile verschwanden aus der Fläche und gaben den dunklen Ozean frei
+ * (bei Kanada 6.5% der Landesfläche). Deshalb wird hier nur noch die exakte
+ * Entartung geprüft.
+ */
+const MIN_SLIVER_RATIO = 1e-6;
 
 /** Lange Polygonkanten werden vorab unterteilt, damit auch Grenzlinien der Kugel folgen. */
 const RING_MAX_STEP_DEG = 1.5;
@@ -49,6 +66,14 @@ function orient(points: Vector2[], counterClockwise: boolean): Vector2[] {
   }
   const isCcw = area > 0;
   return isCcw === counterClockwise ? points : points.slice().reverse();
+}
+
+/** Unwrapped, opened ring mapped into the triangulation plane and oriented. */
+function toContour(ring: LngLat[], counterClockwise: boolean): Vector2[] {
+  return orient(
+    ring.map((point) => new Vector2(point.lon, point.lat)),
+    counterClockwise,
+  );
 }
 
 /**
@@ -78,22 +103,37 @@ export function densifyRing(ring: LngLat[], maxStepDeg = RING_MAX_STEP_DEG): Lng
 }
 
 interface PreparedPolygon {
-  /** Closed rings: outer[0] equals outer[outer.length - 1]. */
+  /** Closed, densified rings: outer[0] equals outer[outer.length - 1] – for borders. */
   outer: LngLat[];
   holes: LngLat[][];
+  /**
+   * Raw rings (not densified) for triangulation. Densification inserts points
+   * exactly on straight edges; Earcut turns those collinear points into slivers
+   * and the refinement explodes (about 8x the geometry for the same surface).
+   * The fill follows the sphere anyway, because the refinement subdivides the
+   * boundary edges afterwards.
+   */
+  contour: Vector2[];
+  contours: Vector2[][];
 }
 
 function preparePolygon(rings: PolygonRings): PreparedPolygon | null {
   if (!rings.length || rings[0].length < 4) return null;
-  const outer = densifyRing(openRing(unwrapRing(rings[0])));
+  const rawOuter = openRing(unwrapRing(rings[0]));
+  if (rawOuter.length < 4) return null;
+  const outer = densifyRing(rawOuter);
   if (outer.length < 4) return null;
+
   const holes: LngLat[][] = [];
+  const contours: Vector2[][] = [];
   for (let i = 1; i < rings.length; i++) {
     if (rings[i].length < 4) continue;
-    const hole = densifyRing(openRing(unwrapRing(rings[i])));
-    if (hole.length >= 4) holes.push(hole);
+    const rawHole = openRing(unwrapRing(rings[i]));
+    if (rawHole.length < 4) continue;
+    holes.push(densifyRing(rawHole));
+    contours.push(toContour(rawHole, false));
   }
-  return { outer, holes };
+  return { outer, holes, contour: toContour(rawOuter, true), contours };
 }
 
 export function buildWorld(features: CountryFeatureCollection, index: CountryIndexFile): BuiltWorld {
@@ -130,10 +170,7 @@ export function buildWorld(features: CountryFeatureCollection, index: CountryInd
    * normal points towards the globe centre. 68 triangles in the raw data were
    * wound the wrong way and were culled as back faces, producing dark patches.
    *
-   * Triangles that are effectively collinear ("slivers") are dropped: they carry
-   * no surface, render nothing, but add winding noise and z-fighting. The ring
-   * densification inserts points exactly on straight lon/lat borders (e.g.
-   * China's) and ear clipping turns those into such slivers.
+   * Only genuinely degenerate triangles are dropped – see MIN_SLIVER_RATIO.
    */
   const flushTriangle = (): void => {
     const ax = scratch[0];
@@ -165,10 +202,11 @@ export function buildWorld(features: CountryFeatureCollection, index: CountryInd
       wx * wx + wy * wy + wz * wz,
       vx * vx + vy * vy + vz * vz,
     );
-    // height / longestEdge < 2% means the triangle has no meaningful area.
     if (longestSq <= 0) return;
-    if (Math.sqrt(nx * nx + ny * ny + nz * nz) / longestSq < 0.02) return;
+    if (Math.sqrt(nx * nx + ny * ny + nz * nz) / longestSq < MIN_SLIVER_RATIO) return;
 
+    // Force the winding outwards. For genuine triangles the sign is stable; a
+    // degenerate remainder is harmless because it covers no pixels.
     if (nx * (ax + bx + cx) + ny * (ay + by + cy) + nz * (az + bz + cz) < 0) {
       const tx = bx;
       const ty = by;
@@ -198,13 +236,15 @@ export function buildWorld(features: CountryFeatureCollection, index: CountryInd
   };
 
   /**
-   * Splits a triangle in parameter space (lon/lat) until every edge is shorter
-   * than STEP_DEG, then projects the leaves onto the sphere.
+   * Refines a triangle in parameter space until every edge is shorter than
+   * STEP_DEG, then projects the leaves onto the sphere.
    *
-   * Splitting in the plane keeps the covered region exactly identical to the
-   * source polygon, while projecting each leaf keeps the surface hugging the
-   * globe so the ocean sphere can never occlude it. Midpoint subdivision of a
-   * planar triangle into four tiles it exactly, so nothing is added or lost.
+   * The longest edge is bisected instead of splitting all three midpoints. A
+   * four-way split produces children similar to the parent, so a thin triangle
+   * stays thin through every level and the work explodes in the short
+   * dimension. Bisecting the longest edge only refines the direction that is
+   * actually too coarse, which keeps long, thin regions cheap while still
+   * hugging the sphere.
    */
   const refine = (
     ax: number,
@@ -221,13 +261,11 @@ export function buildWorld(features: CountryFeatureCollection, index: CountryInd
     const bcy = cy - by;
     const cax = ax - cx;
     const cay = ay - cy;
-    const longestSq = Math.max(
-      abx * abx + aby * aby,
-      bcx * bcx + bcy * bcy,
-      cax * cax + cay * cay,
-    );
+    const abSq = abx * abx + aby * aby;
+    const bcSq = bcx * bcx + bcy * bcy;
+    const caSq = cax * cax + cay * cay;
 
-    if (depth <= 0 || longestSq <= STEP_DEG * STEP_DEG) {
+    if (depth <= 0 || Math.max(abSq, bcSq, caSq) <= STEP_DEG * STEP_DEG) {
       slot = 0;
       projectIntoScratch(ax, ay);
       projectIntoScratch(bx, by);
@@ -236,17 +274,22 @@ export function buildWorld(features: CountryFeatureCollection, index: CountryInd
       return;
     }
 
-    const abmx = (ax + bx) / 2;
-    const abmy = (ay + by) / 2;
-    const bcmx = (bx + cx) / 2;
-    const bcmy = (by + cy) / 2;
-    const camx = (cx + ax) / 2;
-    const camy = (cy + ay) / 2;
-
-    refine(ax, ay, abmx, abmy, camx, camy, depth - 1);
-    refine(abmx, abmy, bx, by, bcmx, bcmy, depth - 1);
-    refine(camx, camy, bcmx, bcmy, cx, cy, depth - 1);
-    refine(abmx, abmy, bcmx, bcmy, camx, camy, depth - 1);
+    if (abSq >= bcSq && abSq >= caSq) {
+      const mx = (ax + bx) / 2;
+      const my = (ay + by) / 2;
+      refine(ax, ay, mx, my, cx, cy, depth - 1);
+      refine(mx, my, bx, by, cx, cy, depth - 1);
+    } else if (bcSq >= caSq) {
+      const mx = (bx + cx) / 2;
+      const my = (by + cy) / 2;
+      refine(bx, by, mx, my, ax, ay, depth - 1);
+      refine(mx, my, cx, cy, ax, ay, depth - 1);
+    } else {
+      const mx = (cx + ax) / 2;
+      const my = (cy + ay) / 2;
+      refine(cx, cy, mx, my, bx, by, depth - 1);
+      refine(mx, my, ax, ay, bx, by, depth - 1);
+    }
   };
 
   /** Builds border and outline segments from a closed ring. */
@@ -273,20 +316,9 @@ export function buildWorld(features: CountryFeatureCollection, index: CountryInd
       const polygon = preparePolygon(rings);
       if (!polygon) continue;
 
-      const contour = orient(
-        polygon.outer.slice(0, -1).map((p) => new Vector2(p.lon, p.lat)),
-        true,
-      );
-      const holes = polygon.holes.map((hole) =>
-        orient(
-          hole.slice(0, -1).map((p) => new Vector2(p.lon, p.lat)),
-          false,
-        ),
-      );
-
-      const flat = [...contour, ...holes.flat()];
-
-      const triangles = ShapeUtils.triangulateShape(contour, holes);
+      // Triangulate the raw rings; the refinement hugs the sphere afterwards.
+      const flat = [...polygon.contour, ...polygon.contours.flat()];
+      const triangles = ShapeUtils.triangulateShape(polygon.contour, polygon.contours);
       for (const triangle of triangles) {
         const a = flat[triangle[0]];
         const b = flat[triangle[1]];
@@ -322,6 +354,13 @@ export function buildWorld(features: CountryFeatureCollection, index: CountryInd
   };
 }
 
+// Three slate-teal stops (linear 0..1), blended per country for a hand-tuned,
+// non-noisy look. Hoisted to module scope: baseColorFor runs inside the
+// per-frame highlight path and must not allocate.
+const TONE_DARK = [0x12 / 255, 0x34 / 255, 0x41 / 255] as const;
+const TONE_MID = [0x1c / 255, 0x4a / 255, 0x5a / 255] as const;
+const TONE_LIGHT = [0x26 / 255, 0x64 / 255, 0x79 / 255] as const;
+
 /** Deterministic per-country base tint so continents read as subtly varied terrain. */
 export function baseColorFor(country: CountryIndexEntry, out: [number, number, number]): [number, number, number] {
   let hash = 2166136261;
@@ -331,12 +370,8 @@ export function baseColorFor(country: CountryIndexEntry, out: [number, number, n
     hash = Math.imul(hash, 16777619);
   }
   const t = ((hash >>> 0) % 1000) / 1000;
-  // Blend between three slate-teal tones for a hand-tuned, non-noisy look.
-  const dark = [0x12 / 255, 0x34 / 255, 0x41 / 255];
-  const mid = [0x1c / 255, 0x4a / 255, 0x5a / 255];
-  const light = [0x26 / 255, 0x64 / 255, 0x79 / 255];
-  const from = t < 0.5 ? dark : mid;
-  const to = t < 0.5 ? mid : light;
+  const from = t < 0.5 ? TONE_DARK : TONE_MID;
+  const to = t < 0.5 ? TONE_MID : TONE_LIGHT;
   const k = t < 0.5 ? t * 2 : (t - 0.5) * 2;
   out[0] = from[0] + (to[0] - from[0]) * k;
   out[1] = from[1] + (to[1] - from[1]) * k;

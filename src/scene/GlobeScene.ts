@@ -107,8 +107,10 @@ export class GlobeScene {
     this.land = new LandLayer(world);
     this.globe.add(this.land.mesh, this.land.borders, this.land.highlightGlow, this.land.highlightLine);
 
+    // The label hangs off the scene, not the globe: it is drawn parallel to the
+    // image plane, so it must not inherit the globe's rotation.
     this.label = new CountryLabel(this.renderer.capabilities.getMaxAnisotropy());
-    this.globe.add(this.label.mesh);
+    this.scene.add(this.label.mesh);
 
     this.globe.add(createAtmosphere());
   }
@@ -144,6 +146,10 @@ export class GlobeScene {
 
   render(): void {
     this.rig.apply();
+    // The label projects the country centre through the camera, so the camera's
+    // world matrix has to be current before it runs.
+    this.rig.camera.updateMatrixWorld();
+    this.label.update(this.rig.camera, this.globe.quaternion, this.rig.getAspect(), this.format);
     this.renderer.render(this.scene, this.rig.camera);
   }
 
@@ -164,6 +170,7 @@ export class GlobeScene {
 
   dispose(): void {
     this.land.dispose();
+    this.label.dispose();
     this.starfield.dispose();
     this.ocean.geometry.dispose();
     (this.ocean.material as MeshStandardMaterial).dispose();

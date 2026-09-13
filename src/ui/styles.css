@@ -78,7 +78,9 @@ body {
   place-items: center;
   padding: 6%;
   pointer-events: none;
-  transition: opacity 480ms ease, transform 480ms ease;
+  /* Duration comes from PANEL_FADE_MS so the transition and the code that waits
+     for it cannot drift apart. */
+  transition: opacity var(--panel-fade, 480ms) ease, transform var(--panel-fade, 480ms) ease;
 }
 
 .ui--hidden {
@@ -348,6 +350,20 @@ kbd {
 
 .hud--hidden {
   opacity: 0;
+}
+
+.hud__logo {
+  width: 152px;
+  height: auto;
+  margin-bottom: 2px;
+  opacity: 0.55;
+  user-select: none;
+  -webkit-user-drag: none;
+  transition: opacity 300ms ease;
+}
+
+.hud__logo--hidden {
+  display: none;
 }
 
 .hud__stats {

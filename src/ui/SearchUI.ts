@@ -1,4 +1,4 @@
-import { FORMATS, type FormatKey } from '../config';
+import { FORMATS, PANEL_FADE_MS, type FormatKey } from '../config';
 import type { CountryRegistry } from '../data/CountryRegistry';
 import type { CountryIndexEntry } from '../data/types';
 import { assetUrl } from '../utils/assets';
@@ -155,9 +155,40 @@ export class SearchUI {
     this.options.onFormatChange(format);
   }
 
-  /** Hides the panel while a film sequence runs. Never steals focus. */
+  /**
+   * Hides the panel while a film sequence runs, or while the mask is hidden by
+   * hand. Dropping focus matters: otherwise typing would keep going into the
+   * invisible field instead of reaching the global shortcuts.
+   */
   setBusy(busy: boolean): void {
     this.root.classList.toggle('ui--hidden', busy);
+    if (!busy) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && this.root.contains(active)) active.blur();
+  }
+
+  /**
+   * Hides the mask and resolves once its fade-out has finished, so the caller
+   * can hold the animation back until nothing of the mask is left on screen.
+   */
+  async hideForSequence(): Promise<void> {
+    if (this.root.classList.contains('ui--hidden')) return;
+    this.setBusy(true);
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        this.root.removeEventListener('transitionend', onEnd);
+        resolve();
+      };
+      const onEnd = (event: TransitionEvent): void => {
+        if (event.target === this.root && event.propertyName === 'opacity') finish();
+      };
+      this.root.addEventListener('transitionend', onEnd);
+      // Fallback in case the transition never fires, e.g. when it is disabled.
+      window.setTimeout(finish, PANEL_FADE_MS + 150);
+    });
   }
 
   focus(): void {
@@ -229,6 +260,9 @@ export class SearchUI {
       return;
     }
     if (event.key === 'Escape') {
+      // Consume the key while the field is focused: otherwise the global
+      // handler in AppController would also trigger a full sequence reset.
+      event.stopPropagation();
       this.hits = [];
       this.highlighted = -1;
       this.renderSuggestions();

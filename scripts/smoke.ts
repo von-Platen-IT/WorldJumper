@@ -5,11 +5,13 @@
  *
  * Usage: npm run smoke
  */
-import { Vector3 } from 'three';
-import { GLOBE_RADIUS, LAND_RADIUS } from '../src/config';
+import { ShaderLib, Vector3, type MeshStandardMaterial } from 'three';
+import { GLOBE_RADIUS, LAND_RADIUS, LABEL } from '../src/config';
 import { CountryRegistry } from '../src/data/CountryRegistry';
 import type { CountryFeatureCollection, CountryIndexFile } from '../src/data/types';
 import { buildWorld, densifyRing } from '../src/geography/GeographyEngine';
+import { LandLayer } from '../src/geography/LandLayer';
+import { CARD_ASPECT, computeLabelLayout } from '../src/scene/labelLayout';
 import { latLonToDirection, openRing, unwrapRing } from '../src/geography/geoProjection';
 import { orientationForDirection } from '../src/geography/orientation';
 import { readFileSync } from 'node:fs';
@@ -98,6 +100,10 @@ for (let i = 0; i < world.landIndices.length; i += 3) {
   );
   const normal = b.clone().sub(a).cross(c.clone().sub(a));
   const centre = a.clone().add(b).add(c);
+  // Entartete Dreiecke decken kein Pixel ab und ihre Normalenrichtung ist
+  // numerisch bedeutungslos. Zum Maßstab: ein flächiges 2.5°-Dreieck hat
+  // Fläche ~3.3e-3, die Schwelle liegt also dreißigmal darunter.
+  if (normal.length() * 0.5 < 1e-4) continue;
   if (normal.dot(centre) < 0) inward++;
 }
 check('all land triangles face outwards', inward === 0, `${inward} inward of ${triangles}`);
@@ -195,15 +201,23 @@ const countryRings = (countryId: string): { lon: number; lat: number }[][] => {
 };
 
 // Das Mesh darf die Region nicht überschreiten (der ursprüngliche Fehler lag
-// bei +20% bis +28% durch Großkreis-Unterteilung) und nur minimal darunter
-// liegen (Splitter-Filter und Sehnen an den Rändern).
-for (const id of ['US', 'BR', 'RU', 'CN', 'AU', 'DE']) {
+// bei +20% bis +28% durch Großkreis-Unterteilung) und muss sie praktisch
+// vollständig füllen.
+//
+// Regressionsschutz: Eine frühere Fassung verwarf dünne Dreiecke pauschal nach
+// ihrem Seitenverhältnis. Da die Unterteilung ein Dreieck in ähnliche Kinder
+// zerlegt, blieben Splitter Splitter und wurden restlos verworfen – ganze
+// dünne Keile fehlten in der Fläche und gaben den dunklen Ozean frei. Genau
+// das war bei Kanada und den USA als "dunklere Dreiecke" sichtbar (USA 2.6%,
+// Kanada 6.5% fehlende Fläche). Die Untergrenze 0.99 schützt davor, dass
+// wieder Fläche verschwindet.
+for (const id of ['CA', 'US', 'GL', 'RU', 'BR', 'CN', 'AU', 'KZ', 'DE']) {
   const mesh = meshSolidAngle(id);
   const truth = scanlineSolidAngle(countryRings(id));
   const ratio = truth > 0 ? mesh / truth : 0;
   check(
     `fill complete for ${id}`,
-    ratio > 0.95 && ratio < 1.01,
+    ratio > 0.99 && ratio < 1.01,
     `mesh/truth=${ratio.toFixed(4)}`,
   );
 }
@@ -283,6 +297,82 @@ check('resolve "usa" -> US', registry.resolve('usa')?.iso2 === 'US');
 check('rejects nonsense', registry.resolve('xyzzyq') === undefined);
 check('search "deu" ranks Germany first', registry.search('deu')[0]?.iso2 === 'DE');
 check('search is accent tolerant', registry.search('Cote')[0] !== undefined || registry.search('Ivoire').length >= 0);
+
+// --- Highlight-Shader-Patch ------------------------------------------------
+// Der Akzent ist jetzt ein Shader-Mix statt eines Vertex-Farb-Uploads. Der Test
+// wendet den Patch auf den echten three.js-Standardmaterial-Quelltext an und
+// prüft, dass die Injektion ankommt. Benennt ein three.js-Update einen
+// Include-Anker um, schlägt der Test fehl, statt dass die Hervorhebung still
+// verschwindet.
+const layer = new LandLayer(world);
+const landMaterial = layer.mesh.material as MeshStandardMaterial;
+const patched = {
+  uniforms: {} as Record<string, unknown>,
+  vertexShader: ShaderLib.standard.vertexShader,
+  fragmentShader: ShaderLib.standard.fragmentShader,
+};
+landMaterial.onBeforeCompile(patched as never, {} as never);
+check(
+  'highlight uniforms injected',
+  'uHighlightColor' in patched.uniforms && 'uHighlightAmount' in patched.uniforms,
+);
+check('highlight attribute declared', patched.vertexShader.includes('attribute float aHighlight;'));
+check('highlight varying written', patched.vertexShader.includes('vHighlight = aHighlight;'));
+check(
+  'highlight mix injected',
+  patched.fragmentShader.includes('mix(diffuseColor.rgb, uHighlightColor, vHighlight * uHighlightAmount)'),
+);
+
+// --- Label-Layout ----------------------------------------------------------
+// Die Karte wird bildparallel gezeichnet und in Bruchteilen des Bildes
+// bemessen. Geprüft wird, dass sie in beiden Formaten vollständig in der Safe
+// Area bleibt, ihr Seitenverhältnis behält und ihre Größe nicht davon abhängt,
+// wie groß das Land ist – genau das war vorher die Ursache der Übergröße.
+const labelLimit = 1 - LABEL.safeAreaInset;
+const labelAnchors: [number, number][] = [
+  [0, 0],
+  [1, 1],
+  [-1, -1],
+  [2, 2],
+  [-2, 2],
+  [0.4, -0.7],
+];
+let labelFits = true;
+let labelAspect = true;
+let labelStable = true;
+
+for (const format of ['landscape', 'portrait'] as const) {
+  const frameAspect = format === 'landscape' ? 16 / 9 : 9 / 16;
+  // Sichtbare Bildhöhe in Welteinheiten am Zoomabstand für Deutschland.
+  const visibleHeight = 2.18;
+  let referenceWidth = -1;
+  for (const [anchorX, anchorY] of labelAnchors) {
+    const layout = computeLabelLayout(visibleHeight, frameAspect, format, anchorX, anchorY);
+    const halfWidth = layout.width / (visibleHeight * frameAspect);
+    const halfHeight = layout.height / visibleHeight;
+    if (
+      layout.ndcX - halfWidth < -labelLimit - 1e-9 ||
+      layout.ndcX + halfWidth > labelLimit + 1e-9 ||
+      layout.ndcY - halfHeight < -labelLimit - 1e-9 ||
+      layout.ndcY + halfHeight > labelLimit + 1e-9
+    ) {
+      labelFits = false;
+    }
+    if (Math.abs(layout.height - layout.width / CARD_ASPECT) > 1e-9) labelAspect = false;
+    if (referenceWidth < 0) referenceWidth = layout.width;
+    else if (Math.abs(layout.width - referenceWidth) > 1e-9) labelStable = false;
+  }
+}
+check('label stays inside the safe area in both formats', labelFits);
+check('label keeps the card aspect ratio', labelAspect);
+check('label size does not depend on the country', labelStable);
+
+const landscapeLabel = computeLabelLayout(2.18, 16 / 9, 'landscape', 0, 0);
+check(
+  'label width follows the configured frame fraction',
+  landscapeLabel.width <= 2.18 * (16 / 9) * LABEL.widthFraction.landscape + 1e-9,
+  `${((landscapeLabel.width / (2.18 * (16 / 9))) * 100).toFixed(1)}% der Bildbreite`,
+);
 
 console.log(failures === 0 ? '\nAll smoke checks passed.' : `\n${failures} smoke check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

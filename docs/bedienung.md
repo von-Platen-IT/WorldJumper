@@ -19,7 +19,11 @@ Das Boot-Overlay zeigt den Fortschritt: Länderdaten laden, Geometrie aufbauen, 
 - Gibt es mehrere Treffer und keinen markierten Vorschlag, startet **nichts**. Die Liste bleibt sichtbar, damit keine zufällige Auswahl entsteht.
 - Gibt es keinen Treffer, erscheint eine kurze Fehlermeldung.
 
-Nach erfolgreicher Auswahl verschwindet die Oberfläche vollständig. Ab jetzt ist nur noch die Szene zu sehen.
+Nach erfolgreicher Auswahl blendet die Oberfläche aus. Die Sequenz startet erst, wenn die Maske vollständig verschwunden ist; während der Fahrt ist nur die Szene zu sehen. Am Ende bleibt das erreichte Land stehen, und die Maske kommt erst etwa eine Sekunde später zurück, damit das Label vorher in Ruhe zu lesen ist. Danach kann direkt das nächste Land eingegeben werden.
+
+#### Mehrere Länder nacheinander ohne Liste
+
+Wird bei stehendem Land direkt ein weiteres Land eingegeben, wird **nicht** zur Ausgangsansicht zurückgesetzt. Die Maske verschwindet, das bisherige Land verliert weich seine Markierungsfarbe und sein Label, die Kamera zieht heraus und fährt unmittelbar zum nächsten Land. Damit lässt sich auch im Einzelmodus eine Aufnahme mit mehreren Ländern nacheinander erzeugen.
 
 ### Länderliste
 
@@ -42,6 +46,8 @@ Die Reihenfolge bleibt exakt erhalten. Zwischen zwei Ländern liegt genau eine S
 | `HOLD` | offen | Endzustand bleibt stehen |
 | `SEQUENCE_PAUSE` | 1000 ms | nur zwischen zwei Ländern |
 
+Die Eingabemaske blendet **vor** der Pause aus (480 ms); die Pause beginnt erst, wenn nichts mehr von ihr zu sehen ist. Am Ende bleibt der Endzustand eine Sekunde unverändert, bevor die Maske zurückkommt.
+
 Die genauen Werte stehen in [`src/config.ts`](../src/config.ts:1) und sind bewusst zentral gehalten.
 
 ## Formate
@@ -59,7 +65,9 @@ Die genauen Werte stehen in [`src/config.ts`](../src/config.ts:1) und sind bewus
 | `↑` `↓` | Vorschlag markieren |
 | `Esc` | Vorschläge schließen / jederzeit zurücksetzen |
 | `R` | zurücksetzen, auch mitten in der Fahrt |
+| `E` | Eingabemaske ein-/ausblenden, ohne die Ansicht zu verändern |
 | `H` | technisches HUD (FPS, Draw Calls, Dreiecke) ein-/ausblenden |
+| `L` | Logo im HUD ein-/ausblenden |
 | `S` | Safe-Area-Rahmen ein-/ausblenden |
 | `Zurück`-Schaltfläche | erscheint unten links, sobald eine Sequenz läuft |
 
@@ -68,8 +76,8 @@ Die genauen Werte stehen in [`src/config.ts`](../src/config.ts:1) und sind bewus
 ## Für die Aufnahme
 
 1. Zielformat wählen (16:9 oder 9:16).
-2. Mit `S` die Safe Area einblenden und prüfen, dass Flagge und Name nicht am Rand kleben.
-3. Mit `H` das technische HUD ausblenden.
+2. Mit `S` die Safe Area einblenden und prüfen, dass Flagge und Name nicht am Rand kleben. Mit `L` lässt sich das Logo links unten separat ausblenden, mit `H` das gesamte HUD.
+3. Mit `H` das technische HUD ausblenden. Die Eingabemaske erscheint nach jeder Fahrt wieder; mit `E` lässt sie sich ausblenden, damit sie nicht im Video landet.
 4. Sequenz starten (Einzelland oder Liste).
 5. Bildschirmaufnahme des Bühnenbereichs starten – die Bühne ist exakt im Zielformat, sodass das Material ohne Nachskalierung in den Schnitt geht.
 6. Nach dem letzten Land bleibt der Endzustand stehen; für die nächste Szene `R` drücken.

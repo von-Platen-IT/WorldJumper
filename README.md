@@ -109,7 +109,9 @@ Ursachenanalyse, manuelle Varianten, SSH-Tunnel-Alternative und Fehlersuche steh
 
 1. Land eintippen – deutscher Name, englischer Name, ISO2 oder ISO3 funktionieren alle.
 2. Vorschlag mit `↑` / `↓` wählen (oder direkt `Enter` bei eindeutigem Treffer).
-3. `Enter` startet die Sequenz, die Oberfläche blendet aus.
+3. `Enter` blendet die Oberfläche aus. Erst wenn die Maske vollständig verschwunden ist, startet die Sequenz mit der 1 s Pause.
+
+Nach jeder Fahrt bleibt das erreichte Land stehen. Die Eingabemaske kommt erst etwa eine Sekunde später zurück, damit das Label vorher in Ruhe zu lesen ist. Wird dann direkt das nächste Land eingegeben, wird **nicht** zur Ausgangsansicht zurückgesetzt: Das bisherige Land verliert weich seine Markierungsfarbe und sein Label, die Kamera zieht heraus und fährt direkt zum nächsten Land. So lässt sich auch im Einzelmodus eine Aufnahme mit mehreren Ländern nacheinander erzeugen.
 
 Beispiele: `Deutschland`, `germany`, `deu`, `DE`, `japan`, `brasilien`.
 
@@ -147,9 +149,15 @@ Die Szene und die Geometrie sind identisch. Es ändern sich nur Kameraabstand, F
 | `Esc` | Vorschläge schließen bzw. jederzeit zurücksetzen |
 | `R` | jederzeit zurücksetzen (auch mitten in einer Fahrt) |
 | `H` | technisches HUD ein-/ausblenden |
+| `L` | Logo im HUD ein-/ausblenden |
+| `E` | Eingabemaske ein-/ausblenden |
 | `S` | Safe-Area-Rahmen ein-/ausblenden |
 
-Für die spätere Aufnahme empfiehlt sich: HUD mit `H` ausblenden, Safe Area mit `S` prüfen, danach Bildschirmaufnahme starten.
+Links unten zeigt das HUD über der Performance-Messung das Logo (`src/pics/logo_banner_small.png`) klein und halbtransparent. Mit `L` wird nur das Logo ausgeblendet, mit `H` das gesamte HUD.
+
+Die Eingabemaske ist im Ruhezustand und nach jeder Fahrt erreichbar. Da sie innerhalb des Aufnahmebereichs liegt, lässt sie sich mit `E` ausblenden, ohne das gezeigte Land oder die Ansicht zu verändern – beim nächsten Phasenwechsel erscheint sie automatisch wieder.
+
+Für die spätere Aufnahme empfiehlt sich: HUD mit `H` ausblenden (oder nur das Logo mit `L`), die Eingabemaske mit `E`, Safe Area mit `S` prüfen, danach Bildschirmaufnahme starten.
 
 ## Projektstruktur
 
@@ -228,9 +236,9 @@ Ergebnis: 177 Länder, 175 mit Flagge, rund 200 kB Geometrie und 36 kB Index.
 
 - **TypeScript + Vite + three.js**, kein UI-Framework ([Begründung](docs/architecture.md)).
 - Land aller Länder steckt in **einem einzigen Mesh**, alle Grenzen in **einem einzigen Linienobjekt**. Damit sind Weltraum, Globus, Land und Grenzen zusammen nur eine Handvoll Draw Calls.
-- Hervorhebung des Zielstaat erfolgt über **Vertex-Farben** des geteilten Landmeshes – kein zusätzliches Mesh, keine Textur pro Land. Beim Ein-/Ausblenden wird nur der Farbbereich des aktiven Landes hochgeladen (`addUpdateRange`), nicht der komplette Puffer.
-- Das Land ist **im Parameterraum fein unterteilt** (max. 2,5° Kantenlänge, rund 265.000 Dreiecke), damit die Oberfläche der Kugel folgt. Ohne das hängen große Länder hinter der Ozeankugel und erscheinen nur an den Rändern gefüllt – Hintergrund und Messwerte in [Verifikation](docs/verifikation.md:99). Der Aufbau dieser Geometrie dauert rund 1,5 s und läuft im Boot-Overlay.
-- Die Flaggen-/Namenskarte ist eine einzige, wiederverwendete Canvas-Textur und liegt **räumlich korrekt auf der Globusoberfläche**, nicht als flaches HUD.
+- Hervorhebung des Zielstaat erfolgt über **Vertex-Farben** des geteilten Landmeshes – kein zusätzliches Mesh, keine Textur pro Land. Der Akzent ist zusätzlich ein **uniform-gesteuerter Shader-Mix** (Vertex-Marker `aHighlight` plus `uHighlightAmount`): pro Frame wird nur ein Uniform gesetzt, kein Vertex-Puffer hochgeladen.
+- Das Land ist **im Parameterraum fein unterteilt** (max. 2,5° Kantenlänge, rund 71.000 Dreiecke), damit die Oberfläche der Kugel folgt. Ohne das hängen große Länder hinter der Ozeankugel und erscheinen nur an den Rändern gefüllt – Hintergrund und Messwerte in [Verifikation](docs/verifikation.md:99). Der Aufbau dieser Geometrie dauert rund 0,1 s und läuft im Boot-Overlay.
+- Die Flaggen-/Namenskarte ist eine einzige, wiederverwendete Canvas-Textur. Sie bleibt am Land verankert, wird aber **parallel zur Bildebene** gezeichnet statt tangential zur Kugel: Der Text steht dadurch immer horizontal, die Größe ist ein fester Anteil des Bildes (unabhängig von der Größe des Landes) und die Karte wird so in die Safe Area geklemmt, dass sie nie über den Rahmen läuft. Sie ist damit kein flaches HUD, sondern eine bildparallele Beschriftung am Globus.
 - Nur **ein** Custom-Shader (Atmosphäre). Kein Post-Processing.
 - `devicePixelRatio` ist gedeckelt; die Vorschau zielt auf ein Full-HD-nahes, stabiles Bild.
 - Im Renderloop passiert nur: Zustand fortschreiben, Rotation/Kamera setzen, zeichnen. Kein Parsen, keine Neuberechnung von Geometrie.
@@ -240,7 +248,7 @@ Details: [Performance-Regeln](docs/performance.md).
 ## Tests
 
 ```bash
-npm run smoke     # 46 kopflose Prüfungen
+npm run smoke     # 57 kopflose Prüfungen
 npm run typecheck
 npm run build
 ```
@@ -258,14 +266,88 @@ Ergebnis und manuelle Prüfliste: [Verifikation](docs/verifikation.md).
 
 ## Hinweise zur Entwicklungsumgebung
 
-In dieser Umgebung war kein systemweites Node.js vorhanden. Es wurde einmalig eine portable Laufzeit installiert:
+Voraussetzung für alle npm-Befehle ist **Node.js ≥ 20** (getestet mit 24.x) inklusive `npm`. Die folgenden Hinweise sind bewusst systemunabhängig formuliert, damit das Projekt auf Linux, macOS und Windows gleichermaßen aufgesetzt werden kann.
+
+### Node.js installieren
+
+Wähle den Weg, der zu deinem System passt:
+
+| System | Empfohlener Weg |
+| --- | --- |
+| Linux (openSUSE) | `sudo zypper install nodejs22` (oder `nodejs20`) |
+| Linux (Debian/Ubuntu) | `sudo apt install nodejs npm` oder das NodeSource-Repo für eine aktuelle Version |
+| Linux (Fedora) | `sudo dnf install nodejs` |
+| macOS | Installer von [nodejs.org](https://nodejs.org) oder `brew install node` |
+| Windows | LTS-Installer von [nodejs.org](https://nodejs.org) |
+| Alle Systeme, ohne Root | Versionsmanager `nvm`/`fnm` oder portable Laufzeit (siehe unten) |
+
+Anschließend prüfen, ob die Installation erfolgreich war:
 
 ```bash
-# Node 24 LTS nach /home/bernd/.local/opt/node-24
-export PATH=/home/bernd/.local/opt/node-24/bin:$PATH
+node --version    # muss ≥ v20 ausgeben
+npm --version
 ```
 
-Alle npm-Befehle setzen diesen `PATH` voraus. Auf einer Maschine mit regulärer Node-Installation entfällt der Schritt.
+### Fehlerbehebung: `npm` bzw. `node` wird nicht gefunden
+
+Meldungen wie `npm: command not found` (Linux/macOS) oder `'npm' is not recognized` (Windows) bedeuten fast immer, dass Node.js entweder **nicht installiert** ist oder das Installationsverzeichnis **nicht im `PATH`** liegt.
+
+Unter openSUSE schlägt die Shell zusätzlich ein Paket vor, zum Beispiel:
+
+```text
+Das Programm 'npm' kann im folgenden Paket gefunden werden:
+  * nodejs-common [ Pfad: /usr/bin/npm, Repository: download.opensuse.org-oss ]
+```
+
+Das ist nur ein Hinweis darauf, welches Paket `npm` bereitstellen würde – es ist **keine** Aufforderung, dieses Paket zwingend zu installieren. Prüfe zuerst, ob bereits eine Node-Installation existiert, die nur nicht im `PATH` liegt:
+
+```bash
+# Linux/macOS: suchen, wo node/npm liegen
+which -a node npm
+ls -d /usr/local/bin/node /opt/node* "$HOME/.local/opt/node"* 2>/dev/null
+
+# Windows (PowerShell)
+Get-Command node, npm -ErrorAction SilentlyContinue
+```
+
+Findet sich eine Installation, genügt es, ihr `bin`-Verzeichnis vorne an den `PATH` anzuhängen (siehe unten). Findet sich keine, installiere Node.js wie oben beschrieben.
+
+### Portable Node-Laufzeit (ohne Root-Rechte)
+
+Wenn keine systemweite Installation möglich oder gewünscht ist, kann Node.js als portable Laufzeit im Benutzerverzeichnis liegen. Beispiel für Linux/macOS:
+
+```bash
+# 1. Node-LTS-Archiv von https://nodejs.org/en/download herunterladen und entpacken,
+#    z. B. nach ~/.local/opt/node-24
+mkdir -p "$HOME/.local/opt"
+tar -xf node-v24.*-linux-x64.tar.xz -C "$HOME/.local/opt"
+mv "$HOME/.local/opt/node-v24."* "$HOME/.local/opt/node-24"
+
+# 2. Für die aktuelle Sitzung in den PATH aufnehmen
+export PATH="$HOME/.local/opt/node-24/bin:$PATH"
+
+# 3. Prüfen
+node --version
+npm --version
+```
+
+Unter Windows entspricht das dem Entpacken des ZIP-Archivs und dem Hinzufügen des entpackten Ordners zum `PATH` (Systemeinstellungen → Umgebungsvariablen).
+
+### `PATH` dauerhaft setzen
+
+Damit der `PATH` nicht in jeder neuen Sitzung erneut gesetzt werden muss, in die Profildatei der Shell eintragen:
+
+```bash
+# Linux/macOS, bash
+echo 'export PATH="$HOME/.local/opt/node-24/bin:$PATH"' >> ~/.bashrc
+
+# Linux/macOS, zsh
+echo 'export PATH="$HOME/.local/opt/node-24/bin:$PATH"' >> ~/.zshrc
+```
+
+Danach ein neues Terminal öffnen oder `source ~/.bashrc` (bzw. `~/.zshrc`) ausführen. In VS Code muss der integrierte Terminal danach neu gestartet werden, damit er den aktualisierten `PATH` übernimmt.
+
+> **Hinweis für diese Umgebung:** Hier war kein systemweites Node.js vorhanden; es wurde einmalig eine portable Laufzeit unter `~/.local/opt/node-24` installiert. Alle npm-Befehle setzen voraus, dass dieses Verzeichnis im `PATH` liegt. Auf einer Maschine mit regulärer Node-Installation entfällt der Schritt.
 
 ## Dokumentation
 

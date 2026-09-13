@@ -5,6 +5,13 @@ const AXIS_Y = new Vector3(0, 1, 0);
 const AXIS_X = new Vector3(1, 0, 0);
 const Z_AXIS = new Vector3(0, 0, 1);
 
+// Scratch objects: these helpers run on every country switch and must not
+// allocate. They are not reentrant, which is fine for this single-threaded,
+// non-nested usage.
+const SCRATCH_DIR = new Vector3();
+const SCRATCH_QY = new Quaternion();
+const SCRATCH_QX = new Quaternion();
+
 /**
  * Rotation that brings a surface direction onto the camera axis (+Z) while
  * keeping the globe's north pole roughly up on screen.
@@ -15,31 +22,17 @@ const Z_AXIS = new Vector3(0, 0, 1);
  * automatically follows the shortest rotational path – no 300° spins.
  */
 export function orientationForDirection(direction: Vector3, target = new Quaternion()): Quaternion {
-  const dir = direction.clone().normalize();
+  const dir = SCRATCH_DIR.copy(direction).normalize();
   const yaw = Math.atan2(-dir.x, dir.z);
   const remaining = Math.hypot(dir.x, dir.z);
   const pitch = Math.atan2(dir.y, remaining);
-  const qy = new Quaternion().setFromAxisAngle(AXIS_Y, yaw);
-  const qx = new Quaternion().setFromAxisAngle(AXIS_X, pitch);
-  return target.copy(qx).multiply(qy);
+  SCRATCH_QY.setFromAxisAngle(AXIS_Y, yaw);
+  SCRATCH_QX.setFromAxisAngle(AXIS_X, pitch);
+  return target.copy(SCRATCH_QX).multiply(SCRATCH_QY);
 }
 
 export function orientationForLatLon(lat: number, lon: number, target = new Quaternion()): Quaternion {
-  return orientationForDirection(latLonToDirection(lat, lon), target);
-}
-
-/**
- * Anchor direction for the flag/name card: nudged from the country's centre
- * towards local north so the label reads like an annotation beside the country
- * instead of covering it.
- */
-export function labelAnchor(direction: Vector3, angularRadius: number): Vector3 {
-  const dir = direction.clone().normalize();
-  let up = AXIS_Y.clone().sub(dir.clone().multiplyScalar(dir.dot(AXIS_Y)));
-  if (up.lengthSq() < 1e-6) up = Z_AXIS.clone().sub(dir.clone().multiplyScalar(dir.dot(Z_AXIS)));
-  up.normalize();
-  const angle = Math.max(0.05, Math.min(0.3, angularRadius * 0.8));
-  return dir.multiplyScalar(Math.cos(angle)).add(up.multiplyScalar(Math.sin(angle))).normalize();
+  return orientationForDirection(latLonToDirection(lat, lon, SCRATCH_DIR), target);
 }
 
 export { Z_AXIS };

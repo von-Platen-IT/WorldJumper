@@ -14,7 +14,6 @@ export const GLOBE_RADIUS = 2;
 export const LAND_RADIUS = GLOBE_RADIUS * 1.004;
 export const BORDER_RADIUS = GLOBE_RADIUS * 1.009;
 export const HIGHLIGHT_BORDER_RADIUS = GLOBE_RADIUS * 1.015;
-export const LABEL_RADIUS = GLOBE_RADIUS * 1.035;
 
 /** Never render above this factor – a crisp Full-HD preview beats a heavy retina buffer. */
 export const MAX_PIXEL_RATIO = 1.5;
@@ -45,7 +44,18 @@ export const TIMING = {
   zoomToCountry: 2100,
   /** Fixed breath between two countries of a sequence. */
   sequencePause: 1000,
+  /**
+   * Time the finished shot stays untouched before the search mask returns, so
+   * the label can actually be read before it is covered again.
+   */
+  maskAfterHold: 1000,
 };
+
+/**
+ * Fade duration of the search mask. Mirrored into CSS as `--panel-fade` at boot
+ * so the transition and the code waiting for it cannot drift apart.
+ */
+export const PANEL_FADE_MS = 480;
 
 /** Idle spin: a full revolution every ~24 seconds. */
 export const IDLE_SPIN_SPEED = (Math.PI * 2) / 24000;
@@ -87,9 +97,29 @@ export const FORMATS: Record<FormatKey, { width: number; height: number; label: 
   portrait: { width: 1080, height: 1920, label: 'Portrait 9:16' },
 };
 
+/**
+ * The flag/name card. It stays anchored to the country but is drawn parallel to
+ * the image plane, so its text is always horizontal and its size is measured in
+ * fractions of the frame instead of the country's angular radius. That is what
+ * keeps small and large countries equally readable and always inside the frame.
+ */
 export const LABEL = {
+  /** Card texture size; its aspect ratio is the card's aspect ratio. */
+  canvasWidth: 1024,
+  canvasHeight: 416,
   /** Minimum inset from the frame edge for flag/name legibility in video. */
   safeAreaInset: 0.06,
+  /** Card width as a fraction of the visible frame width, per format. */
+  widthFraction: { landscape: 0.3, portrait: 0.6 } as Record<FormatKey, number>,
+  /** Upper bound as a fraction of the visible frame height, for flat formats. */
+  maxHeightFraction: 0.22,
+  /**
+   * Gap between the country's centre and the card's lower edge, in card
+   * heights. Keeps the card from covering the country it labels.
+   */
+  screenGap: 0.6,
+  /** Distance of the card above the globe surface, relative to the globe radius. */
+  radiusFactor: 1.035,
 };
 
 export const starCount = 1400;
